@@ -1,3 +1,4 @@
+from __future__ import annotations
 def summarize_verdicts(results: list[dict]) -> dict:
     """Count claims across key verification categories."""
     summary = {
@@ -60,9 +61,7 @@ def build_markdown_report(paper_name: str, results: list[dict]) -> str:
             "",
         ])
 
-    return "\n".join(lines)"""CSV and PDF report generation for pipeline output."""
-
-from __future__ import annotations
+    return "\n".join(lines)
 
 from io import BytesIO
 from typing import Any
