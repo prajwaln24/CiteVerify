@@ -1,3 +1,5 @@
+import io
+import fitz
 import streamlit as st
 from report import build_markdown_report, summarize_verdicts
 
@@ -5,8 +7,8 @@ st.set_page_config(page_title="CiteVerify", page_icon="📄", layout="wide")
 
 st.title("CiteVerify — Scientific Claim & Citation Verification")
 st.caption(
-    "Upload a research paper PDF to inspect extracted claims, citations, source evidence, "
-    "confidence indicators, and downloadable verification reports."
+    "Upload a research paper or academic document to inspect extracted claims, citations, "
+    "source evidence, confidence indicators, and downloadable verification reports."
 )
 st.info(
     "**Human Review Reminder:** Confidence scores reflect evidence alignment and uncertainty—"
@@ -49,6 +51,9 @@ SAMPLE_RESULTS = [
     },
 ]
 
+# [ADDED #1] Supported document extensions for research papers/reports/notes
+ALLOWED_EXTENSIONS = ["pdf", "txt", "md", "docx"]
+
 
 def normalize_result(raw: dict) -> dict:
     """Safely normalize fields so varying teammate output keys won't crash the UI."""
@@ -74,6 +79,32 @@ def normalize_result(raw: dict) -> dict:
     }
 
 
+# [ADDED #2] Extract text across PDF, TXT, MD, and DOCX uploads
+def extract_text_from_upload(uploaded_file) -> str:
+    filename = uploaded_file.name.lower()
+    raw_bytes = uploaded_file.getvalue()
+
+    if filename.endswith(".pdf"):
+        doc = fitz.open(stream=raw_bytes, filetype="pdf")
+        text = "\n".join(
+            f"--- Page {i + 1} ---\n{page.get_text()}"
+            for i, page in enumerate(doc)
+        )
+        doc.close()
+        return text
+
+    if filename.endswith((".txt", ".md")):
+        return raw_bytes.decode("utf-8", errors="replace")
+
+    if filename.endswith(".docx"):
+        from docx import Document
+
+        doc = Document(io.BytesIO(raw_bytes))
+        return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+
+    raise ValueError(f"Unsupported file extension for '{uploaded_file.name}'.")
+
+
 if "results" not in st.session_state:
     st.session_state["results"] = []
 if "paper_name" not in st.session_state:
@@ -81,7 +112,11 @@ if "paper_name" not in st.session_state:
 
 col_upload, col_actions = st.columns([3, 1])
 with col_upload:
-    uploaded_pdf = st.file_uploader("Upload a research paper (PDF)", type=["pdf"])
+    # [ADDED #3] Pass ALLOWED_EXTENSIONS instead of only ["pdf"]
+    uploaded_pdf = st.file_uploader(
+        "Upload a research paper or document (PDF, TXT, MD, DOCX)",
+        type=ALLOWED_EXTENSIONS,
+    )
     if uploaded_pdf is not None:
         st.caption(f"Selected file: **{uploaded_pdf.name}** ({round(uploaded_pdf.size / 1024, 1)} KB)")
 
@@ -103,24 +138,30 @@ if use_sample:
 
 if run_verify:
     if uploaded_pdf is None:
-        st.warning("Please upload a PDF file first, or click 'Load Sample Demo Data' to test the interface.")
+        st.warning("Please upload a document first, or click 'Load Sample Demo Data' to test the interface.")
     else:
         st.session_state["paper_name"] = uploaded_pdf.name
         try:
-            with st.spinner("Extracting claims, matching citations, retrieving sources, and checking evidence..."):
-                # TODO: Replace SAMPLE_RESULTS with your team's pipeline functions:
-                # text = pdf_reader.extract_text(uploaded_pdf)
-                # claims = claim_extractor.extract_claims(text)
-                # citations = citation_extractor.extract_citations(text)
-                # sources = research_retriever.retrieve_sources(citations)
-                # raw_results = evidence_checker.verify_claims(claims, citations, sources)
-                raw_results = SAMPLE_RESULTS
+            with st.spinner("Extracting text, claims, citations, and checking evidence..."):
+                # [ADDED #4] Extract text for any allowed extension
+                extracted_text = extract_text_from_upload(uploaded_pdf)
+
+                if not extracted_text.strip():
+                    st.warning("No readable text was found in this file.")
+                    st.session_state["results"] = []
+                else:
+                    # TODO: Pass `extracted_text` into your pipeline functions:
+                    # claims = claim_extractor.extract_claims(extracted_text)
+                    # citations = citation_extractor.extract_citations(extracted_text)
+                    # sources = research_retriever.retrieve_sources(citations)
+                    # raw_results = evidence_checker.verify_claims(claims, citations, sources)
+                    raw_results = SAMPLE_RESULTS
 
             st.session_state["results"] = [normalize_result(r) for r in raw_results]
             if not st.session_state["results"]:
-                st.warning("No claims were returned for this document. Try another PDF or inspect the extractor output.")
+                st.warning("No claims were returned for this document. Try another file or inspect the extractor output.")
         except Exception as exc:
-            st.error(f"Something went wrong while processing the PDF: {exc}")
+            st.error(f"Something went wrong while processing the file: {exc}")
 
 results = st.session_state["results"]
 
