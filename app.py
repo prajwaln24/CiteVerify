@@ -1,7 +1,9 @@
 import io
+import re
 import fitz
 import streamlit as st
-import pymupdf
+from difflib import SequenceMatcher
+from tavily import TavilyClient
 from report import build_markdown_report, summarize_verdicts
 
 st.set_page_config(page_title="CiteVerify", page_icon="📄", layout="wide")
@@ -51,9 +53,98 @@ SAMPLE_RESULTS = [
         "source_link": "https://example.org/dl-survey",
     },
 ]
-
-# [ADDED #1] Supported document extensions for research papers/reports/notes
 ALLOWED_EXTENSIONS = ["pdf", "txt", "md", "docx"]
+def clean_text(text):
+    text = text.lower()
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"[^a-z0-9\s]", "", text)
+    return text.strip()
+
+
+def split_sentences(text):
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+
+    return [
+        s.strip()
+        for s in sentences
+        if len(s.split()) >= 8
+    ]
+
+
+def calculate_similarity(text1, text2):
+    return SequenceMatcher(
+        None,
+        clean_text(text1),
+        clean_text(text2)
+    ).ratio() * 100
+
+
+def check_uploaded_documents(main_text, reference_files):
+
+    matches = []
+
+    main_sentences = split_sentences(main_text)
+
+    for reference_file in reference_files:
+
+        reference_text = extract_text_from_upload(reference_file)
+
+        reference_sentences = split_sentences(reference_text)
+
+        for sentence in main_sentences:
+
+            for reference_sentence in reference_sentences:
+
+                score = calculate_similarity(
+                    sentence,
+                    reference_sentence
+                )
+
+                if score >= 72:
+
+                    matches.append({
+                        "source": reference_file.name,
+                        "sentence": sentence,
+                        "reference": reference_sentence,
+                        "similarity": round(score, 2)
+                    })
+
+                    break
+
+    return matches
+
+
+def check_internet_sources(text, api_key):
+
+    client = TavilyClient(api_key=api_key)
+
+    matches = []
+
+    sentences = split_sentences(text)[:6]
+
+    for sentence in sentences:
+
+        response = client.search(
+            query=f'"{sentence[:220]}"',
+            max_results=5
+        )
+
+        for result in response.get("results", []):
+
+            content = result.get("content", "")
+
+            score = calculate_similarity(sentence, content)
+
+            if score >= 45:
+
+                matches.append({
+                    "source": result.get("title", "Online source"),
+                    "url": result.get("url", ""),
+                    "sentence": sentence,
+                    "similarity": round(score, 2)
+                })
+
+    return matches
 
 
 def normalize_result(raw: dict) -> dict:
@@ -163,7 +254,157 @@ if run_verify:
                 st.warning("No claims were returned for this document. Try another file or inspect the extractor output.")
         except Exception as exc:
             st.error(f"Something went wrong while processing the file: {exc}")
+# ==========================================
+# PLAGIARISM DETECTION INTERFACE
+# ==========================================
 
+st.divider()
+
+st.header("🔍 Plagiarism Detection")
+
+st.write(
+    "Check your research paper against internet sources "
+    "and uploaded reference documents."
+)
+
+api_key = st.text_input(
+    "Enter Tavily API Key",
+    type="password"
+)
+
+reference_files = st.file_uploader(
+    "Upload reference research papers",
+    type=ALLOWED_EXTENSIONS,
+    accept_multiple_files=True,
+    key="plagiarism_files"
+)
+
+check_plagiarism = st.button(
+    "Run Plagiarism Detection",
+    type="primary"
+)
+
+if check_plagiarism:
+
+    if uploaded_pdf is None:
+
+        st.warning("Upload your main research paper first.")
+
+    else:
+
+        try:
+
+            main_text = extract_text_from_upload(uploaded_pdf)
+
+            internet_matches = []
+            document_matches = []
+
+            if api_key:
+
+                with st.spinner("Searching internet sources..."):
+
+                    internet_matches = check_internet_sources(
+                        main_text,
+                        api_key
+                    )
+
+            if reference_files:
+
+                with st.spinner("Comparing uploaded documents..."):
+
+                    document_matches = check_uploaded_documents(
+                        main_text,
+                        reference_files
+                    )
+
+            st.subheader("Internet Matches")
+
+            if internet_matches:
+
+                for match in internet_matches:
+
+                    with st.container(border=True):
+
+                        st.write(match["sentence"])
+
+                        st.write(
+                            f"Similarity: {match['similarity']}%"
+                        )
+
+                        st.write(match["source"])
+
+                        if match["url"]:
+                            st.markdown(
+                                f"[Open Source]({match['url']})"
+                            )
+
+            else:
+
+                st.info("No internet matches identified.")
+
+            st.subheader("Uploaded Document Matches")
+
+            if document_matches:
+
+                for match in document_matches:
+
+                    with st.container(border=True):
+
+                        st.write(
+                            f"Reference file: {match['source']}"
+                        )
+
+                        st.write(
+                            f"Similarity: {match['similarity']}%"
+                        )
+
+                        st.write(
+                            f"Your sentence: {match['sentence']}"
+                        )
+
+                        st.write(
+                            f"Reference sentence: {match['reference']}"
+                        )
+
+            else:
+
+                st.info("No document matches identified.")
+
+            # Download report
+
+            report_lines = [
+                "# CiteVerify Plagiarism Report",
+                "",
+                "## Internet Matches",
+            ]
+
+            for match in internet_matches:
+                report_lines.append(
+                    f"- {match['sentence']} | "
+                    f"{match['similarity']}% | {match['url']}"
+                )
+
+            report_lines.append("")
+            report_lines.append("## Uploaded Document Matches")
+
+            for match in document_matches:
+                report_lines.append(
+                    f"- {match['sentence']} | "
+                    f"{match['similarity']}% | {match['source']}"
+                )
+
+            plagiarism_report = "\n".join(report_lines)
+
+            st.download_button(
+                "Download Plagiarism Report",
+                data=plagiarism_report,
+                file_name="plagiarism_report.md",
+                mime="text/markdown"
+            )
+
+        except Exception as exc:
+
+            st.error(f"Plagiarism error: {exc}")
 results = st.session_state["results"]
 
 if results:
