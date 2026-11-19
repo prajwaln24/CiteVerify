@@ -1,4 +1,5 @@
 import streamlit as st
+import pymupdf
 from report import build_markdown_report, summarize_verdicts
 
 st.set_page_config(page_title="CiteVerify", page_icon="📄", layout="wide")
