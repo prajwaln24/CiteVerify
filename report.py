@@ -1,8 +1,4 @@
-"""CSV, Markdown, and PDF report generation for CiteVerify."""
-
 from __future__ import annotations
-
-
 def summarize_verdicts(results: list[dict]) -> dict:
     """Count claims across key verification categories."""
     summary = {
